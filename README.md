@@ -9,6 +9,7 @@ The first target is a Go 4 that powers off during playback while its USB chargin
 - On this Linux host, the Go 4 is connected through Bluetooth A2DP (SBC). Its PipeWire sink exists but was suspended with no audio stream at the time of the first snapshot. The saved default sink points to AirPods, so a real Linux playback test must confirm the game stream is routed to the Go 4.
 - With USB attached in ordinary mode, the Go 4 did not enumerate as a USB device on this Linux host. That is consistent with charging only; it does **not** measure whether USB power is stable.
 - The user reports that on Windows the speaker apparently powers off during active playback while USB power is attached. Pressing Power turns it back on and it reconnects immediately. This points toward speaker-side power, charging, or firmware behavior, but the cause is not established yet.
+- In USB service mode on this unit, pressing Volume+, Volume−, and Play produced no audible/playback change, no CDC bytes, and no change in the host-visible USB PCM volume control during a synchronized 40-second capture. The firmware reason remains unknown.
 - JBL's current Go 4 firmware release note lists **0.7.4.1 (30 October 2026)** as a performance update. It does not name a shutdown or USB-audio fix. Record the speaker's current version before updating so pre/post behavior can be compared. JBL says Go 4 firmware updates have migrated from JBL Portable to **JBL ONE**.
 
 ## Reproduce the shutdown

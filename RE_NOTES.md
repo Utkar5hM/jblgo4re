@@ -40,6 +40,8 @@ The device node was `/dev/bus/usb/003/096` for this capture and is root owned. T
 
 `tools/cdc_listen.py` is a passive reader for bulk IN `0x83`; it does not transmit. A 30-second capture received no bytes. Whether any speaker buttons were pressed during that window is unconfirmed. A 25-second ALSA poll of the USB PCM volume control showed `0,0` throughout, with button presses likewise unconfirmed.
 
+In a later 40-second synchronized capture, the user pressed Volume+, Volume−, and Play in USB service mode and reported no change in loudness or playback. CDC IN emitted no bytes, the ALSA USB PCM volume control remained `0,0`, and the device stayed enumerated as `0ac8:bb91`. This confirms that these buttons provide no observed control in this mode on the tested unit; it does not yet locate the firmware gate or prove the buttons are electrically disabled.
+
 `tools/cdc_version.py` sends only `AT+HMDevVER\r\n` in a 60-byte frame to bulk OUT `0x04` and reads bulk IN `0x83`. The frame contains a `0f f0` marker, 16-bit payload length, zero-padded payload, and a little-endian CRC-16/CCITT over the first 58 bytes, matching the archived firmware's transmit routine. The live device accepted the 60-byte USB write but returned no data in 2.5 seconds. Repeating the query with CDC DTR set and with the length field set to `0x36` also returned no data; DTR was then cleared. This does not prove that the parser is active in this mode or that the live firmware matches the archived image. No reset, power, or update command was sent.
 
 ## Preliminary code paths
@@ -56,7 +58,7 @@ The device node was `/dev/bus/usb/003/096` for this capture and is root owned. T
 ## Next static/dynamic steps
 
 1. Follow callers of partition 0 `0x40acc` to the button scanner and chord recognizer.
-2. Locate the condition that disables keys in service mode, or determine whether the main application is bypassed entirely.
+2. Locate the condition that disables keys in service mode, or determine whether the main application is bypassed entirely. The live button test confirms the loss of Volume+/Volume−/Play behavior.
 3. Trace the USB receive callback that fills ring buffer `0x20003340` and determine why the live service-mode interface produces no version-query reply.
 4. Obtain this unit's exact firmware version and, if possible, its matching OTA for a reliable patch target. [JBL says Go 4 updates moved to JBL ONE](https://support.jbl.com/gb/en/howto/portable-app-partybox-app-migration-to-jbl-one-app-mtbw9ikdhub-emea/000054613.html), so new OTA discovery should target that app rather than the older JBL Portable package.
 5. Before attempting a firmware modification, establish an image backup and recovery path for this board revision.
