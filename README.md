@@ -1,6 +1,6 @@
 # JBL Go 4 reverse engineering notebook
 
-The [firmware and USB findings](RE_NOTES.md) contain the current reverse engineering map and local Ghidra setup.
+The [firmware, BLE, and USB findings](RE_NOTES.md) contain the current reverse engineering map and local Ghidra setup.
 
 The first target is a Go 4 that powers off during playback while its USB charging cable is connected. The second target is understanding its hidden USB audio mode and whether ordinary volume and playback controls can be retained. This repo contains host probes, firmware analysis tools, and a reproducible test plan. The optional CDC version probe sends one read-only query to the speaker. Nothing here flashes firmware.
 
@@ -10,7 +10,18 @@ The first target is a Go 4 that powers off during playback while its USB chargin
 - With USB attached in ordinary mode, the Go 4 did not enumerate as a USB device on this Linux host. That is consistent with charging only; it does **not** measure whether USB power is stable.
 - The user reports that on Windows the speaker apparently powers off during active playback while USB power is attached. Pressing Power turns it back on and it reconnects immediately. This points toward speaker-side power, charging, or firmware behavior, but the cause is not established yet.
 - In USB service mode on this unit, pressing Volume+, Volume−, and Play produced no audible/playback change, no CDC bytes, and no change in the host-visible USB PCM volume control during a synchronized 40-second capture. The firmware reason remains unknown.
-- JBL's current Go 4 firmware release note lists **0.7.4.1 (30 October 2026)** as a performance update. It does not name a shutdown or USB-audio fix. Record the speaker's current version before updating so pre/post behavior can be compared. JBL says Go 4 firmware updates have migrated from JBL Portable to **JBL ONE**.
+- A live BLE query confirms this speaker runs **0.6.4.0**, product ID `0x20e4`. It reported 100% battery and charging during the query; this is a snapshot, not a shutdown measurement. The archived 0.6.4.0 image is therefore the correct release to analyze.
+- JBL's current Go 4 firmware release note lists **0.7.4.1 (30 October 2026)** as a performance update. It does not name a shutdown or USB-audio fix. JBL says Go 4 firmware updates have migrated from JBL Portable to **JBL ONE**.
+
+## Read the installed firmware over BLE
+
+With the speaker powered on, run:
+
+```bash
+.venv/bin/python tools/ble_probe.py
+```
+
+Install dependencies with `.venv/bin/pip install -r requirements.txt` if needed. The script scans for Harman manufacturer ID `0x0057` and Go 4 product ID `0x20e4`, connects to the JBL control service, and sends only firmware and device-info requests. It prints the firmware, product ID, and battery state while suppressing the speaker name, serial number, and Bluetooth address. A live run returned `firmware: 0.6.4.0` and `battery: 100% (charging)`. See [RE_NOTES.md](RE_NOTES.md) for frame details.
 
 ## Reproduce the shutdown
 
@@ -84,5 +95,7 @@ The service-mode USB descriptor also exposes a CDC data interface (`0x04` OUT, `
 - [JBL factory reset procedure](https://support.harmanaudio.com/howto/factory-reset-procedure-go-series-mhdtyj1wllf-us/000053858.html) — Go 4 reset is Volume+ and Play for more than 3 seconds; this erases settings and pairings.
 - [JBL USB audio support article](https://support.jbl.com/gb/en/howto/can-i-listen-to-lossless-audio-on-my-speaker-and-does-it-support-usb-music-playback-from-laptops-and-tablets-emea/000048463.html) — lists Go 5 and other supported models, not Go 4.
 - [Community Go 4 firmware archive](https://github.com/pembem22/jbl-firmware) — static analysis sample, not a flashing recommendation.
+- [JBLControl](https://github.com/ffrafat/JBLControl) and [OpenJBL](https://github.com/NiceDayZc/openjbl) — independent BLE protocol implementations; both recognize the Go 4 product ID. JBLControl's probe supplied the read request framing used here.
+- [ConnectPlus](https://github.com/pembem22/connect-plus) — another protocol implementation, but its firmware flashing is documented as tested only on CSR chipsets; that is not a verified Go 4 flashing path.
 
 `captures/` is gitignored because logs can contain local device identifiers. Review a log before sharing it.

@@ -1,6 +1,6 @@
 # Go 4 reverse engineering notes
 
-These findings are from `Go4_ota_all0600.bin`, the official `Go4_ota_all0640.bin` image, and a live Go 4 in USB service mode on 31 October 2026. Neither image is verified as the firmware on this unit. Addresses below refer to raw partition load addresses, not offsets in the OTA container. Unless marked 0.6.4.0, addresses refer to the older 0600 image.
+These findings are from `Go4_ota_all0600.bin`, the official `Go4_ota_all0640.bin` image, and a live Go 4 on 31 October 2026. A read-only BLE query confirmed the unit runs 0.6.4.0; this matches the analyzed release, though a cryptographic equality check against the installed bytes is unavailable. Addresses below refer to raw partition load addresses, not offsets in the OTA container. Unless marked 0.6.4.0, addresses refer to the older 0600 image.
 
 ## Local toolchain
 
@@ -14,6 +14,12 @@ JAVA_HOME="$PWD/.toolchain/jdk" .toolchain/ghidra_12.2_PUBLIC/ghidraRun
 The analyzed projects are `captures/ghidra/go4_stage0_v3` and `captures/ghidra/go4_main_v3`. Load `stage0_40000.bin` as `ARM:LE:32:Cortex` at `0x40000` and `main_00000.bin` as the same processor at `0x0`. The Ghidra scripts in `tools/ghidra/` seed Cortex-M vector handlers, find literal references and immediates, and dump decompiled functions.
 
 The newer 0.6.4.0 image is saved as `captures/Go4_ota_all0640.bin` (SHA-256 `56867f41fb985776ae530b5a7d50ae01bd188561480caf0aae66661c3dc8d3aa`). It matches the byte stream at the [official Harman OTA URL](https://storage.harman.com/release/portable/go4/Go4_ota_all0640.bin), and its [OTA manifest](https://github.com/vddCore/jbl-firmware-archive/blob/master/Firmware/speaker/JBL%20GO%204/20e4/release/go4_ota.json) identifies version 0.6.4.0 and target PID `20e4`. Its extracted files and analyzed Ghidra projects are under `captures/firmware0640/`, `captures/ghidra/go4_stage0_0640`, and `captures/ghidra/go4_main_0640`. All four partitions have the same sizes as 0600 but different content. The official 0.7.4.1 image has not been acquired.
+
+## Live BLE control probe
+
+The Go 4 advertises JBL service data `FDDF` and Harman manufacturer ID `0x0057` with product ID `0x20e4`. Its BLE control service is `65786365-6c70-6f69-6e74-2e636f6d0000`, with notify characteristic ending `0001` and write characteristic ending `0002`. A read-only request `aa 41 00` returned command `0x42`, payload `00 06 04 00`, and a trailing zero byte: firmware **0.6.4.0**. Request `aa 11 00` returned device-info tokens including `0x42=20e4`, `0x44=e4` (100%, charging), and `0x4d=30363430` (ASCII `0640`). The read-only `tools/ble_probe.py` reproduces this and suppresses identity fields.
+
+The observed frame shape and opcodes agree with [JBLControl's source](https://github.com/ffrafat/JBLControl/blob/main/Sources/JBLControlKit/JBLProtocol.swift) and [OpenJBL's APK-derived protocol notes](https://github.com/NiceDayZc/openjbl/blob/main/docs/PROTOCOL.md). Both source trees are cloned only under ignored `captures/vendor/`. [ConnectPlus](https://github.com/pembem22/connect-plus) implements older JBL BLE control and a DFU flow, but its own README limits flashing validation to CSR speakers. It is not a verified updater for this Go 4's Vimicro/Zgmicro image. No BLE firmware write, reset, or mode command was sent.
 
 ## OTA layout
 
@@ -75,7 +81,7 @@ In a later 40-second synchronized capture, the user pressed Volume+, Volume−, 
 2. Locate the condition that disables keys in service mode, or determine whether the main application is bypassed entirely. The live button test confirms the loss of Volume+/Volume−/Play behavior.
 3. Locate the state-write point triggered by the Play+Bluetooth chord. In 0.6.4.0, mode-state transition `0x901` leads to USB-audio event `0x806`, but the chord recognizer is still unknown.
 4. Trace why USB task event `0xa03` is or is not emitted in service mode, and why the live CDC endpoint produces no version-query reply.
-5. Obtain this unit's exact firmware version and, if possible, its matching OTA for a reliable patch target. [JBL says Go 4 updates moved to JBL ONE](https://support.jbl.com/gb/en/howto/portable-app-partybox-app-migration-to-jbl-one-app-mtbw9ikdhub-emea/000054613.html), while the old public `go4_ota.json` still serves 0.6.4.0.
+5. The installed firmware is 0.6.4.0 and its official OTA image is available. Trace the JBL Portable/JBL ONE OTA transport and integrity checks before constructing an image. [JBL says Go 4 updates moved to JBL ONE](https://support.jbl.com/gb/en/howto/portable-app-partybox-app-migration-to-jbl-one-app-mtbw9ikdhub-emea/000054613.html), while the old public `go4_ota.json` still serves 0.6.4.0.
 6. Before attempting a firmware modification, establish an image backup and recovery path for this board revision.
 
 Reference: [community firmware archive](https://github.com/pembem22/jbl-firmware), [Go 4 teardown](https://www.52audio.com/archives/221424.html), [JBL's Go 4 firmware notes](https://support.jbl.com/us/en/howto/go-4-software-update-release-notes-us/000043859.html).
