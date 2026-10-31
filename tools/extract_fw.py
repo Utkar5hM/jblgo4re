@@ -9,14 +9,17 @@ import struct
 import sys
 
 
-EXPECTED_SHA256 = "2f440402006a65d29778075021e58cb174cf20626920187acfe0faaee75a5d19"
+KNOWN_IMAGES = {
+    "2f440402006a65d29778075021e58cb174cf20626920187acfe0faaee75a5d19": "0600",
+    "56867f41fb985776ae530b5a7d50ae01bd188561480caf0aae66661c3dc8d3aa": "0.6.4.0",
+}
 PARTITION_NAMES = {1: "stage0_40000", 2: "main_00000", 3: "part2_unknown", 6: "part3_unknown"}
 
 
 def extract(source: Path, output: Path):
     blob = source.read_bytes()
     digest = hashlib.sha256(blob).hexdigest()
-    if digest != EXPECTED_SHA256:
+    if digest not in KNOWN_IMAGES:
         print(f"warning: unstudied image SHA-256 {digest}; inspect all metadata before using it", file=sys.stderr)
     if not blob.startswith(b"HMHEADER9"):
         raise ValueError("missing HMHEADER9")
@@ -26,13 +29,13 @@ def extract(source: Path, output: Path):
         raise ValueError(f"implausible partition count {count}")
     descriptors = []
     for number in range(count):
-        part_id, length, parameter, integrity_word = struct.unpack_from("<BIII", blob, 0x11 + 13 * number)
-        descriptors.append((part_id, length, parameter, integrity_word))
+        part_id, length, parameter, metadata_word = struct.unpack_from("<BIII", blob, 0x11 + 13 * number)
+        descriptors.append((part_id, length, parameter, metadata_word))
 
     cursor = 0x11 + 13 * count
     output.mkdir(parents=True, exist_ok=True)
     manifest = {"source": str(source), "sha256": digest, "partitions": []}
-    for number, (part_id, length, parameter, integrity_word) in enumerate(descriptors):
+    for number, (part_id, length, parameter, metadata_word) in enumerate(descriptors):
         name = PARTITION_NAMES.get(part_id, f"part{number}_type{part_id}")
         if blob[cursor:cursor + 8] != b"PARTHMDT":
             raise ValueError(f"partition {number} marker missing at 0x{cursor:x}")
@@ -49,7 +52,7 @@ def extract(source: Path, output: Path):
             "size": f"0x{length:x}",
             "partition_id": part_id,
             "parameter_unknown": f"0x{parameter:08x}",
-            "integrity_word_unknown": f"0x{integrity_word:08x}",
+            "metadata_word_unknown": f"0x{metadata_word:08x}",
             "sha256": hashlib.sha256(data).hexdigest(),
         }
         if part_id in (1, 2):
