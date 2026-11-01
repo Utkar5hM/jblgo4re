@@ -20,3 +20,9 @@ The same BLE command dispatcher that answered the live version query handles OTA
 - **A main-only container would flip to a bank holding stale or blank stage0/DSP, so always send all 4 partitions.** — [static]+[hyp]
 - The OTA control path (0xAA-framed `0x57774` → `0x57dcc`) lives only in stage0. Setup `0x519f8` needs `0x4f4d2()` ∈ {2,3}. — [static]
 - No watchdog kick pattern was found. Software reset is `0x4a154` (register at `*0x45e0c`). Deliberate infinite hangs: `0x4f614`, `0x4f64c`, `0x49490`. — [static]
+
+## In-partition integrity fields (2026-11-02)
+- Each ARM partition ends with a 28-byte metadata block right before its `0xff` padding. stage0 `[stage0] 0x5e39c`: `u32 code_len=0x1e39c`, **`u32 go4crc(0x40000..0x5e39b)=0xf798464c`** (verified), then `00 06 03 03`…, build date `19 07 11 0a 04 2d` (2025-07-17 10:04:45), and `2e 00`. Main has the same layout at `[main] 0xd50cc` (date 2025-07-16 20:32:41). **Any code patch must recompute this CRC.** No reader exists in stage0 or main; the mask ROM is the suspected checker. — [static]
+- Every partition (including part2 and part3) also ends with a 4-byte trailer (stage0 `c7 84 9e d1`, main `4b 05 00 32`). It doesn't match go4, IEEE or CRC32C (any reflect/init/xorout), adler32, a byte sum, md5/sha1/sha256 prefixes, or a forcing word to a constant residue over any sensible range. **Unidentified; keep it byte-identical.** — [static, negative]
+- go4crc over the whole partition including the trailer = the OTA descriptor CRC (the known outer check). — [static]
+- part3 (ID 6, 32 KiB) is high-entropy up to the last byte. It might be keys/signature or encrypted data. Unknown. — [hyp]
