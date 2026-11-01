@@ -75,9 +75,8 @@ A host-side volume control may be possible even when the speaker's own buttons a
 
 The existing service-mode USB descriptor has no HID interface, and a synchronized press test produced no CDC traffic or host-visible volume changes. A host script therefore has no observed button events to bind. Restoring the speaker's physical buttons requires locating the mode-specific key path in firmware or adding a new USB control path; the current repo does not contain a validated patch.
 
-The service-mode USB descriptor also exposes a CDC data interface (`0x04` OUT, `0x83` IN). `tools/cdc_listen.py` passively watches IN traffic, and `tools/cdc_version.py` sends the archived firmware's framed `AT+HMDevVER` query. Install the local Python dependencies with `python3 -m venv .venv` and `.venv/bin/pip install -r requirements.txt`. Both tools need read/write access to the current `/dev/bus/usb/BUS/DEVICE` node. The current unit accepted the version-query write but did not reply, even with DTR enabled; see [RE_NOTES.md](RE_NOTES.md) before interpreting that path.
+The service-mode USB descriptor exposes UAC1 audio plus a CDC data interface (`0x04` OUT, `0x83` IN), but no HID interface. The version query and two `AT+HMDevKIN` key-report probes got no CDC replies. `tools/cdc_listen.py` passively watches IN traffic; `tools/cdc_version.py` sends the archived firmware's framed `AT+HMDevVER` query; `tools/cdc_key_probe.py` temporarily enables the diagnostic key-report gate and turns it back off on exit. These probes characterize the stock mode. The firmware target is a new USB playback mode with normal speaker processing and a host-visible control interface for the physical buttons.
 
-`tools/cdc_key_probe.py --seconds 20` is an experimental next probe for service mode. It enables diagnostic key reports in RAM, listens for button presses, and disables reports when it exits. The analyzed firmware supports these commands, but the live USB command parser has not been confirmed. This tool has not been run on the speaker.
 
 ## Firmware research
 
