@@ -29,10 +29,12 @@ def crc16_ccitt(data: bytes) -> int:
     return value
 
 
-def make_frame() -> bytes:
+def make_frame(command: bytes = COMMAND) -> bytes:
+    if len(command) > FRAME_SIZE - 6:
+        raise ValueError("command is too long for a 60-byte frame")
     frame = bytearray(FRAME_SIZE)
-    frame[:4] = bytes((0x0F, 0xF0, len(COMMAND), 0))
-    frame[4 : 4 + len(COMMAND)] = COMMAND
+    frame[:4] = bytes((0x0F, 0xF0, len(command), 0))
+    frame[4 : 4 + len(command)] = command
     checksum = crc16_ccitt(frame[:58])
     frame[58:60] = checksum.to_bytes(2, "little")
     return bytes(frame)
