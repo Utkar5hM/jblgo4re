@@ -42,6 +42,8 @@ The same BLE command dispatcher that answered the live version query handles OTA
 
 OTA partition ID 3 (`part2_unknown.bin` in the extractor) is not generic calibration data: its header contains the section names `proj_bsp32.X`, `proj_bsp32.Y`, and `proj_bsp32.P`, plus `0kbsp32_go4.bin`. Embedded strings identify a separate Zgmicro DSP build dated May 15, 2025, with source names such as `BTAudioHandle.cpp`, `Interface.c`, and `data_path.c`. Its pipeline exposes paths named `player`, `recode`, `refer`, `lbren`, `lbrde`, `ldacen`, `ldacde`, `aacen`, and `aacde`; processing symbols include `hmProcess`, `VDSP_SetAlgParamInit`, `VDSP_SetAlgParamDyn`, and `setAdjustGain`. The binary is not ELF and Ghidra's installed processor modules do not include BSP32, so these strings are leads only; they do not prove which path USB or Bluetooth selects or whether `hmProcess` includes EQ.
 
+An attempt to import this partition as ARM Cortex-M into a separate temporary Ghidra project completed analysis but discovered zero functions. This rules out treating its code region as ordinary ARM firmware; a DSP-specific decoder or vendor toolchain is needed for instruction-level analysis.
+
 The first two reset handlers disassemble as Thumb code. The `0x400000` references from partition 1 appear to point to a separate ROM or address space; this mapping remains unverified. Do not concatenate the executable partitions into one address space without resolving that overlap.
 
 ## Live USB service mode
@@ -51,6 +53,8 @@ The Linux host enumerated `0ac8:bb91`, manufacturer `Zgmicro`, product `JBL Go 4
 - USB Audio Class 1.0, 48 kHz, 16-bit, stereo playback on isochronous OUT endpoint `0x02`.
 - Audio Feature Unit 2: master mute and left/right volume controls. ALSA reports the volume control as `0..100` with `0.00..0.39 dB`, effectively no attenuation. PipeWire can still apply host-side software volume.
 - CDC ACM control/data interfaces with bulk OUT `0x04` and IN `0x83`. There is no HID interface, so no standard USB button events. The CDC control interface has no notification endpoint and Linux did not create `/dev/ttyACM*`; passive captures yielded no data, and read-only version queries got no reply.
+
+In a later read-only host snapshot while USB audio was playing, PipeWire routed the Brave stream to the Go 4 USB sink. The paired JBL Classic address reported `Connected: no`, and an 18-second Bluetooth discovery scan did not find the Go 4. Combined with the prior BLE scan that found no Go 4 advertisement in this mode, this gives no evidence for a Bluetooth-to-USB host control bridge while the speaker is in service mode. The Bluetooth address and UUID list shown by `bluetoothctl info` are cached pairing data, not proof of a live radio connection.
 
 The device node was `/dev/bus/usb/003/096` for this capture and is root owned. That path will change after re-enumeration. A temporary per-user ACL was granted with a PolicyKit password prompt; it disappears when the device is unplugged.
 
