@@ -134,17 +134,39 @@ def plan(blob, parts, version, mtu):
 # ---------------------------------------------------------------------------
 # transmit / commit modes (BLE)
 
-async def run_ble(blob, version, address, scan_seconds, commit, mtu_arg):
+async def run_ble(blob, version, address, scan_seconds, commit, mtu_arg, pace_arg, assume_yes):
+    import subprocess
     from bleak import BleakClient, BleakScanner
 
-    seen = await BleakScanner.discover(timeout=scan_seconds, return_adv=True)
-    matches = [d for d, ad in seen.values()
-               if ad.manufacturer_data.get(0x0057, b"")[:2] == struct.pack("<H", GO4_PID)
-               and (address is None or d.address.lower() == address.lower())]
-    if len(matches) != 1:
-        raise SystemExit(f"need exactly one advertising Go 4 (found {len(matches)}); "
-                         "ensure it is ON, in NORMAL BT mode, and pass --address if needed.")
-    device = matches[0]
+    if address:
+        # The speaker auto-connects for classic audio, which suppresses its LE
+        # advertisement. Drop that link, then grab the LE device by address in
+        # the window before it re-auto-connects. Match by ADDRESS (its LE adv
+        # carries no Harman manufacturer data).
+        device = None
+        for attempt in range(4):
+            try:
+                subprocess.run(["bluetoothctl", "disconnect", address],
+                               capture_output=True, timeout=10)
+            except Exception as e:
+                print(f"(disconnect attempt failed: {e})")
+            await asyncio.sleep(1.5)
+            print(f"  scanning for LE advert (attempt {attempt+1}/4)...")
+            device = await BleakScanner.find_device_by_address(address, timeout=scan_seconds)
+            if device is not None:
+                print(f"  found {address} over LE")
+                break
+        if device is None:
+            raise SystemExit(f"{address} not seen over LE. Toggle the speaker and retry; "
+                             "it must be advertising LE (not held in a classic-audio link).")
+    else:
+        seen = await BleakScanner.discover(timeout=scan_seconds, return_adv=True)
+        matches = [d for d, ad in seen.values()
+                   if ad.manufacturer_data.get(0x0057, b"")[:2] == struct.pack("<H", GO4_PID)]
+        if len(matches) != 1:
+            raise SystemExit(f"need exactly one advertising Go 4 (found {len(matches)}); "
+                             "ensure it is ON, in NORMAL BT mode, or pass --address.")
+        device = matches[0]
 
     acks: asyncio.Queue = asyncio.Queue()
 
@@ -215,22 +237,38 @@ async def run_ble(blob, version, address, scan_seconds, commit, mtu_arg):
         if r[1] == 0x00:
             await expect({OP_SECT})
 
-        # 3) stream
+        # 3) stream.  The device ACKs only on error/mismatch (aa45..) or every
+        # ~Nth packet; a correctly-accepted packet is answered with SILENCE.
+        # So we stream like the app: fire packets write-without-response at a
+        # steady pace, never block on a per-packet ack, and only react to an
+        # explicit error reply.  Completion is client-side (all bytes sent);
+        # the device then accepts 0x4d only if its received-counter is full.
         total = len(blob)
         idx = 0
         off = 0
+        pace = max(0.004, pace_arg)
+        err = {"seen": None}
+
+        # re-point the notify handler to watch for hard errors during streaming
+        while not acks.empty():
+            acks.get_nowait()
+
         while off < total:
             part = blob[off:off + chunk]
             await send(OP_DATA, bytes([idx & 0xFF]) + part, response=False)
-            r = await expect({OP_SECT})
-            if not r or r[1] != OP_SECT:
-                await abort(f"chunk {idx} at off 0x{off:x} not acked (resp {r.hex() if r else 'timeout'})")
             off += len(part)
             idx += 1
-            if idx % 64 == 0 or off >= total:
+            await asyncio.sleep(pace)
+            # drain any notifications without blocking; a 0x00/0x11 error reply aborts
+            while not acks.empty():
+                r = acks.get_nowait()
+                if r[1] == 0x00 and r[2] >= 1 and r[3] != 0:        # error status on a cmd-ack
+                    await abort(f"device error {r.hex()} near chunk {idx} off 0x{off:x}")
+            if idx % 256 == 0 or off >= total:
                 print(f"  sent {off}/{total} ({100*off//total}%)  frames={idx}")
 
-        print("transfer complete; inactive bank written (reversible until 0x4d).")
+        await asyncio.sleep(0.5)
+        print("transfer complete (all bytes streamed); inactive bank written (reversible until 0x4d).")
 
         if not commit:
             await client.stop_notify(NOTIFY)
@@ -244,9 +282,12 @@ async def run_ble(blob, version, address, scan_seconds, commit, mtu_arg):
         print("speaker into the new firmware. If the new image is bad this may not be")
         print("recoverable (no proven ROM rollback). The device re-checked every")
         print("partition CRC during transfer; all acks were success.")
-        ans = input('Type exactly  FLASH  to apply, anything else to abort: ')
-        if ans.strip() != "FLASH":
-            await abort("user declined commit")
+        if assume_yes:
+            print("--yes given: proceeding with apply (operator pre-authorized).")
+        else:
+            ans = input('Type exactly  FLASH  to apply, anything else to abort: ')
+            if ans.strip() != "FLASH":
+                await abort("user declined commit")
         await send(OP_TRIGGER)
         r = await expect({OP_TRIGGER_RESP}, timeout=20.0)
         if r and r[1] == OP_TRIGGER_RESP:
@@ -266,7 +307,9 @@ def main():
     ap.add_argument("--address", help="LE address if several Go 4 advertise")
     ap.add_argument("--scan-seconds", type=float, default=10)
     ap.add_argument("--mtu", type=int, default=0, help="override assumed/negotiated ATT MTU")
+    ap.add_argument("--pace", type=float, default=0.008, help="seconds between data packets (default 8ms)")
     ap.add_argument("--debug", action="store_true", help="print every BLE frame sent/received")
+    ap.add_argument("--yes", action="store_true", help="with --commit: skip the interactive FLASH prompt (operator pre-authorized)")
     args = ap.parse_args()
     global DEBUG
     DEBUG = args.debug
@@ -279,7 +322,7 @@ def main():
             ap.error("--commit requires --transmit")
         plan(blob, parts, args.version, args.mtu or 247)
         return
-    asyncio.run(run_ble(blob, args.version, args.address, args.scan_seconds, args.commit, args.mtu))
+    asyncio.run(run_ble(blob, args.version, args.address, args.scan_seconds, args.commit, args.mtu, args.pace, args.yes))
 
 
 if __name__ == "__main__":

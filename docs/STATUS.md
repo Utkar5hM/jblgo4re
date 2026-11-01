@@ -48,7 +48,10 @@ Either way, a patch should touch as little as possible and should leave the reco
 
 **BLOCKER FOR BOTH — recovery (Q5, answered): a bad stage0 is a potential brick, rollback is mask-ROM-only and unprovable.** Options: SoC datasheet/SDK (Zgmicro, not public), a sacrificial 2nd unit to test ROM rollback, or finding a ROM UART/USB download mode (needs live, user-present work). **The decision to flash is the user's.** NOTE: the corruption/transfer-bug brick vector is now removed (Q6 closed) — the device re-CRCs each partition and the sender aborts before apply on any error. The only remaining brick risk is that the usb-parity-v1 stage0, though CRC-valid, is behaviorally wrong at boot. v1 is a 42-byte, in-place, disassembly-verified stage0 patch that leaves reset/scatter-load and all other code paths intact, which makes that risk low but not zero.
 
-## Flashing (ready — user-driven, present)
+## FLASHED 2026-11-02 — usb-parity-v1 applied; device healthy
+usb-parity-v1 was streamed over BLE and applied (`0x4d`). The Go 4 flipped bank, rebooted, and is responsive (fw 0.6.4.0, PID 0x20e4, control service OK). **Not bricked.** Keys to success + the working `tools/ota_sender.py` recipe are in findings/ota.md ("Q6 FLASHED"). Remaining: user behavioral test that EQ + Vol± now work in the Play+BT USB service mode.
+
+## Flashing (recipe — user-driven, present)
 All build/verify is done; sending is the user's call on present hardware in NORMAL BT mode.
 1. Dry-run plan (safe, no device): `.venv/bin/python tools/ota_sender.py captures/patch-candidates/usb-parity-v1/Go4_ota_all0640_usbparity.bin`
 2. Transmit without applying (writes inactive bank only, reversible, never sends 0x4d): add `--transmit`. Confirm it streams to 100% with every chunk acked.
