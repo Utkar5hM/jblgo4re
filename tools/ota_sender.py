@@ -45,6 +45,8 @@ OP_TRIGGER_RESP = 0x4C
 
 TWO_BYTE_LEN = {0x44, 0x97, 0x98, 0x99}
 
+DEBUG = False
+
 
 def frame(cmd: int, payload: bytes = b"") -> bytes:
     """AA <cmd> <len> <payload>; len is 2-byte BE for 0x44/0x97-0x99, else 1 byte."""
@@ -149,6 +151,13 @@ async def run_ble(blob, version, address, scan_seconds, commit, mtu_arg):
     async with BleakClient(device, timeout=20) as client:
         if SERVICE not in [s.uuid for s in client.services]:
             raise SystemExit("control service unavailable")
+        if not mtu_arg:
+            acq = getattr(client, "_acquire_mtu", None)
+            if acq:
+                try:
+                    await acq()
+                except Exception as e:
+                    print(f"(mtu acquire failed: {e})")
         mtu = mtu_arg or getattr(client, "mtu_size", 23)
         chunk = mtu - 7
         if chunk < 16:
@@ -157,13 +166,21 @@ async def run_ble(blob, version, address, scan_seconds, commit, mtu_arg):
 
         def on_notify(_c, data: bytes):
             data = bytes(data)
+            if DEBUG:
+                print(f"    <- {data.hex()}")
             if len(data) >= 2 and data[0] == 0xAA:
                 acks.put_nowait(data)
 
         await client.start_notify(NOTIFY, on_notify)
 
-        async def send(cmd, payload=b""):
-            await client.write_gatt_char(WRITE, frame(cmd, payload), response=True)
+        async def send(cmd, payload=b"", response=True):
+            # Data (0x44) MUST use write-without-response: the control char does not
+            # ATT-ack data writes, so write-with-response blocks ~5s each and the
+            # device's OTA session times out. Control opcodes use write-with-response.
+            f = frame(cmd, payload)
+            if DEBUG:
+                print(f"    -> {f[:12].hex()}{'...' if len(f) > 12 else ''} (op 0x{cmd:02x}, {len(f)}B, resp={response})")
+            await client.write_gatt_char(WRITE, f, response=response)
 
         async def expect(cmds, timeout=10.0):
             try:
@@ -204,7 +221,7 @@ async def run_ble(blob, version, address, scan_seconds, commit, mtu_arg):
         off = 0
         while off < total:
             part = blob[off:off + chunk]
-            await send(OP_DATA, bytes([idx & 0xFF]) + part)
+            await send(OP_DATA, bytes([idx & 0xFF]) + part, response=False)
             r = await expect({OP_SECT})
             if not r or r[1] != OP_SECT:
                 await abort(f"chunk {idx} at off 0x{off:x} not acked (resp {r.hex() if r else 'timeout'})")
@@ -249,7 +266,10 @@ def main():
     ap.add_argument("--address", help="LE address if several Go 4 advertise")
     ap.add_argument("--scan-seconds", type=float, default=10)
     ap.add_argument("--mtu", type=int, default=0, help="override assumed/negotiated ATT MTU")
+    ap.add_argument("--debug", action="store_true", help="print every BLE frame sent/received")
     args = ap.parse_args()
+    global DEBUG
+    DEBUG = args.debug
 
     blob, parts = parse_and_verify(args.container)
     print(f"container verified: {len(parts)} partitions, all per-partition CRCs OK\n")
