@@ -83,3 +83,11 @@ In a later 40-second synchronized capture, the user pressed Volume+, Volume−, 
 - `0x4f4d2` reports **main's readiness** (glob byte0 bits[5:4]==1 written by `[main] 0x805b4`, plus runs+0/+9/+0xd), not USB attach. — [static]
 - Full classification of the 25 `byte0` checks (LED, PMIC IRQ, charge policy, power-smart, unplug → power-off, etc.) is in the Q8 report table, summarized here: in service mode, unplugging (`0xc01`) or "no cable" (`0xc07`) posts `0x902` power-off; `0x50d30` reason-6 fires only in state 1 (normal), which keeps it the **P1 candidate**. — [static]
 - Draft normal-boot patch (v2, not built): `0x59e6a` `ff f7 d3 fd` → `bl` to a gate at `0x5e3da` (USB not started && `0x540a0()` && `0x4f4d2()>=2`); `0x59e84` `24 d1` → `00 bf`; `0x59e58` → `b.w 0x5e3b8` stub adding a `0xc00` (plug) trigger. Uses 64 B of the cave `0x5e3b8..0x5e3fb`. Risks: wall charger vs host can't be told apart, no teardown on unplug, BT+USB at once (main's `0x92298` defers while a BT stream is active), level jump to 32, and the `0x4fccc` follower is missing. Scratch: `captures/scratch/q8/`. — [static]
+
+## usb-parity-v1 design (2026-11-02; verified encodings, not built)
+- EDIT 1, EQ resend: `[stage0] 0x4f278..0x4f28b` (18-byte function + 2-byte pad, unreferenced) → `10b5 2022 0121 0020 00f046f9 f3f77eff 0120 10bd` = `0x4f510(0,1,0x20); 0x43184(); return 1`. Keystone-assembled; calls resolve to `0x4f510`/`0x43184`. — [static]
+- EDIT 2, key whitelist: `[stage0] 0x4d686..0x4d69b` → `200a 0f28 07d0 b4f5c06f 04d0 a4f60020 0128 18d1 00bf` (allow `evt>>8==0xf`, `0x600`, `0xa01` in mode 2; else drop to `0x4d6cc`). Branch targets sit on boundaries. Other modes are unaffected (`0x4d684` skips the block). — [static]
+- The state-2 event pre-filter `0x529fc` (table `0x5d238[2]`) passes `0xf05`/`0xf06`. — [static]
+- Flat-profile gate in `0x43184` (`*0x20000074+10` bits 0/3) is cleared at stream start by `[main] 0x8c7fc` → `0x5774` (main object `*0x200217a8`). Same block as stage0's `*0x20000074`? — [hyp]
+- `patches/usb-parity-v1/xrefscan.py` (read-only full branch/word scan) shows no references into the replaced ranges other than the entry `bl` at `0x59e92` and the loop's own branches. — [static]
+- Not done: unicorn emulation of the 19 key events, CRC rewrite, container build and verification.
