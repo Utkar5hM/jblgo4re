@@ -14,6 +14,21 @@ KNOWN_IMAGES = {
     "56867f41fb985776ae530b5a7d50ae01bd188561480caf0aae66661c3dc8d3aa": "0.6.4.0",
 }
 PARTITION_NAMES = {1: "stage0_40000", 2: "main_00000", 3: "part2_unknown", 6: "part3_unknown"}
+CRC_POLYNOMIAL_REFLECTED = 0x681BB522
+
+
+def go4_crc32(data: bytes) -> int:
+    """CRC used for each OTA partition (init/final XOR 0xffffffff)."""
+    table = []
+    for index in range(256):
+        value = index
+        for _ in range(8):
+            value = (value >> 1) ^ (CRC_POLYNOMIAL_REFLECTED if value & 1 else 0)
+        table.append(value)
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc = table[(crc ^ byte) & 0xFF] ^ (crc >> 8)
+    return crc ^ 0xFFFFFFFF
 
 
 def extract(source: Path, output: Path):
@@ -43,6 +58,11 @@ def extract(source: Path, output: Path):
         data = blob[start:start + length]
         if len(data) != length:
             raise ValueError(f"partition {number} truncated")
+        actual_crc = go4_crc32(data)
+        if actual_crc != metadata_word:
+            raise ValueError(
+                f"partition {number} CRC mismatch: header 0x{metadata_word:08x}, computed 0x{actual_crc:08x}"
+            )
         path = output / f"{name}.bin"
         path.write_bytes(data)
         item = {
@@ -52,7 +72,7 @@ def extract(source: Path, output: Path):
             "size": f"0x{length:x}",
             "partition_id": part_id,
             "parameter_unknown": f"0x{parameter:08x}",
-            "metadata_word_unknown": f"0x{metadata_word:08x}",
+            "crc32": f"0x{metadata_word:08x}",
             "sha256": hashlib.sha256(data).hexdigest(),
         }
         if part_id in (1, 2):
