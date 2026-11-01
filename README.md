@@ -1,6 +1,6 @@
 # JBL Go 4 reverse engineering notebook
 
-The [firmware, BLE, and USB findings](RE_NOTES.md) contain the current reverse engineering map and local Ghidra setup.
+Status and plan: [docs/STATUS.md](docs/STATUS.md). Findings by topic: [docs/findings/](docs/findings/). Agent and tooling guide: [CLAUDE.md](CLAUDE.md).
 
 The first target is a Go 4 that powers off during playback while its USB charging cable is connected. The second target is understanding its hidden USB audio mode and whether ordinary volume and playback controls can be retained. This repo contains host probes, firmware analysis tools, and a reproducible test plan. The optional CDC version probe sends one read-only query to the speaker. Nothing here flashes firmware.
 
@@ -10,6 +10,7 @@ The first target is a Go 4 that powers off during playback while its USB chargin
 - With USB attached in ordinary mode, the Go 4 did not enumerate as a USB device on this Linux host. That is consistent with charging only; it does **not** measure whether USB power is stable.
 - The user reports that on Windows the speaker apparently powers off during active playback while USB power is attached. Pressing Power turns it back on and it reconnects immediately. This points toward speaker-side power, charging, or firmware behavior, but the cause is not established yet.
 - In USB service mode on this unit, pressing Volume+, Volume−, and Play produced no audible/playback change, no CDC bytes, and no change in the host-visible USB PCM volume control during a synchronized 40-second capture. The firmware reason remains unknown.
+- Static analysis now traces normal-mode Volume+/Volume− events into separate stored volume indices and two internal message paths. USB service mode still uses a separate DSP channel, so no safe join between the normal processing path and USB PCM has been identified yet.
 - A live BLE query confirms this speaker runs **0.6.4.0**, product ID `0x20e4`. It reported 100% battery and charging during the query; this is a snapshot, not a shutdown measurement. The archived 0.6.4.0 image is therefore the correct release to analyze.
 - JBL's current Go 4 firmware release note lists **0.7.4.1 (30 October 2026)** as a performance update. It does not name a shutdown or USB-audio fix. JBL says Go 4 firmware updates have migrated from JBL Portable to **JBL ONE**.
 
@@ -21,7 +22,7 @@ With the speaker powered on, run:
 .venv/bin/python tools/ble_probe.py
 ```
 
-Install dependencies with `.venv/bin/pip install -r requirements.txt` if needed. The script scans for Harman manufacturer ID `0x0057` and Go 4 product ID `0x20e4`, connects to the JBL control service, and sends only firmware and device-info requests. It prints the firmware, product ID, and battery state while suppressing the speaker name, serial number, and Bluetooth address. A live run returned `firmware: 0.6.4.0` and `battery: 100% (charging)`. See [RE_NOTES.md](RE_NOTES.md) for frame details.
+Install dependencies with `.venv/bin/pip install -r requirements.txt` if needed. The script scans for Harman manufacturer ID `0x0057` and Go 4 product ID `0x20e4`, connects to the JBL control service, and sends only firmware and device-info requests. It prints the firmware, product ID, and battery state while suppressing the speaker name, serial number, and Bluetooth address. A live run returned `firmware: 0.6.4.0` and `battery: 100% (charging)`. See [docs/findings/ble.md](docs/findings/ble.md) for frame details.
 
 ## Reproduce the shutdown
 
@@ -73,9 +74,9 @@ JBL's documented normal USB audio procedure lists the **Go 5**, not the Go 4. Th
 
 A host-side volume control may be possible even when the speaker's own buttons are disabled: on Linux try `wpctl set-volume <USB-sink-ID> 0.15`; on Windows start with the app's own volume control. This attenuates the audio sent to the USB device and does not restore physical button handling. Whether Windows' master slider works depends on the USB audio interface exposed in service mode; test its descriptors before designing a workaround.
 
-The existing service-mode USB descriptor has no HID interface, and a synchronized press test produced no CDC traffic or host-visible volume changes. A host script therefore has no observed button events to bind. Restoring the speaker's physical buttons requires locating the mode-specific key path in firmware or adding a new USB control path; the current repo does not contain a validated patch.
+The plan for a USB mode with Bluetooth-mode parity (EQ, buttons, volume on the speaker itself) is tracked in [docs/STATUS.md](docs/STATUS.md). An earlier offline candidate (`patches/go4-0640-usb-controls`) that forwarded keys to the host over CDC was reviewed and not adopted; see [docs/findings/usb-mode.md](docs/findings/usb-mode.md).
 
-The service-mode USB descriptor exposes UAC1 audio plus a CDC data interface (`0x04` OUT, `0x83` IN), but no HID interface. The version query and two `AT+HMDevKIN` key-report probes got no CDC replies. `tools/cdc_listen.py` passively watches IN traffic; `tools/cdc_version.py` sends the archived firmware's framed `AT+HMDevVER` query; `tools/cdc_key_probe.py` temporarily enables the diagnostic key-report gate and turns it back off on exit. These probes characterize the stock mode. The firmware target is a new USB playback mode with normal speaker processing and a host-visible control interface for the physical buttons.
+The service-mode USB descriptor exposes UAC1 audio plus a CDC data interface (`0x04` OUT, `0x83` IN), but no HID interface. The version query and two `AT+HMDevKIN` key-report probes got no CDC replies. `tools/cdc_listen.py` passively watches IN traffic; `tools/cdc_version.py` sends the archived firmware's framed `AT+HMDevVER` query; `tools/cdc_key_probe.py` temporarily enables the stock diagnostic key-report gate; `tools/cdc_button_bridge.py` passively consumes key reports from the offline patch candidate and can map them to host volume/Play/Pause. The candidate preserves battery shutdown behavior and is not runtime validated or safe to flash without recovery.
 
 
 ## Firmware research
@@ -85,6 +86,16 @@ The service-mode USB descriptor exposes UAC1 audio plus a CDC data interface (`0
 - Its header begins `HMHEADER9`, and strings include `JBL Go 4`, `PowerOffStatusTimer`, `charge_bypass_task`, `VOLUME_CHANGED`, `POWEROFF`, and `VOL_UP`. These strings show useful code areas to investigate; they do not establish the cause of this unit's shutdown. The archived image is not the newly announced 0.7.4.1 release.
 - OTA partition ID 3 (`part2_unknown.bin`) is a CoolFlux BSP32 image. Extract its X/Y/P regions from the local firmware copy with `python3 tools/extract_coolflux.py captures/firmware0640/part2_unknown.bin --out-dir captures/coolflux0640`; the script checks section bounds and markers and prints section hashes. The raw firmware and extracted segments stay under ignored `captures/`.
 - Each OTA partition is checked with a custom CRC-32 (reflected polynomial `0x681bb522`). `tools/extract_fw.py` verifies every partition, and `tools/repack_fw.py` can rebuild a same-size edited partition **offline** with the matching CRC. An unchanged rebuild matched the official OTA byte for byte; a one-byte test edit also passed offline validation. This does not validate a patch or make a live flash safe.
+- New static-analysis queries can be run with Ghidra's headless Java script engine, for example:
+
+  ```bash
+  JAVA_HOME="$PWD/.toolchain/jdk" PATH="$PWD/.toolchain/jdk/bin:$PATH" \
+    .toolchain/ghidra_12.2_PUBLIC/support/analyzeHeadless captures/ghidra go4_main_0640 \
+    -process main_00000.bin -noanalysis -scriptPath tools/ghidra \
+    -postScript DumpFunctions.java 0x8cd2c 0x8e128 0x8deb4
+  ```
+
+  `ReportXrefs.java` reports references to addresses; `FindLiteralXrefs.java` locates literal-pool references to RAM addresses. Logs stay in ignored `captures/ghidra/`.
 - An [original Go 4 teardown](https://www.52audio.com/archives/221424.html) identifies a ZGMICRO WS9652A audio SoC, a Southchip SC89619D charger, a USB input protection chip, and a protected 850 mAh cell in the unit it opened. That is a reference board, not confirmation of this speaker's hardware revision. A shutdown while USB is connected can still involve the power path or battery.
 - Before flashing a patch: identify this unit's hardware revision, obtain a verified backup/recovery path, finish mapping the update handshake and boot checks, and identify the shutdown branch that actually fires. The installed version is known, but the installed bytes have not been dumped.
 
