@@ -2,7 +2,20 @@
 
 Status and plan: [docs/STATUS.md](docs/STATUS.md). Findings by topic: [docs/findings/](docs/findings/). Agent and tooling guide: [CLAUDE.md](CLAUDE.md).
 
-The first target is a Go 4 that powers off during playback while its USB charging cable is connected. The second target is understanding its hidden USB audio mode and whether ordinary volume and playback controls can be retained. This repo contains host probes, firmware analysis tools, and a reproducible test plan. The optional CDC version probe sends one read-only query to the speaker. Nothing here flashes firmware.
+The first target is a Go 4 that powers off during playback while its USB charging cable is connected. The second target is understanding its hidden USB audio mode and whether ordinary volume and playback controls can be retained. This repo contains host probes, firmware analysis tools, offline-built OTA patches, and a reproducible test plan.
+
+> **Safety:** the read-only probes send at most one query to the speaker. The `patches/` here are modified firmware that **can be flashed**; they were built and verified entirely offline, and any flashing is a deliberate, user-driven step on present hardware with a proven recovery path. This is reverse-engineered vendor firmware for research — it is not official, and flashing third-party firmware carries brick risk. No firmware or APK binaries are included (only their source links); see the bottom of this file.
+
+## Result (November 2026)
+
+A **USB-C audio mode with working physical controls** was achieved on fw 0.6.4.0 (PID `0x20e4`) and confirmed live:
+
+- On a **normal boot** (no service-mode chord), plugging USB brings up USB audio through the normal DSP/EQ chain, and **Vol+/Vol−** work (`patches/usb-parity-plan-a-min`).
+- Converting the dead CDC interface to a native **USB HID consumer-control** interface makes **Vol+/Vol− move the host PC's system volume** — captured live on Linux (`patches/usb-parity-hid`).
+- A 2-byte `bcdDevice` bump (`patches/usb-parity-hid-winfix`) addresses a Windows-only enumeration cache issue.
+- Play/Pause over HID needs a `main`-partition change and is tracked as follow-up.
+
+Details and the reliable BLE OTA recipe are in [docs/findings/usb-mode.md](docs/findings/usb-mode.md) and [docs/findings/ota.md](docs/findings/ota.md). All patches keep the `main`/DSP partitions byte-identical to stock, and every change sits on a USB-only path so a no-USB boot stays stock and BLE/OTA-recoverable.
 
 ## Current observations
 
