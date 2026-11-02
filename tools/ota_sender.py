@@ -248,6 +248,10 @@ async def run_ble(blob, version, address, scan_seconds, commit, mtu_arg, pace_ar
         off = 0
         pace = max(0.004, pace_arg)
         err = {"seen": None}
+        mism_total = 0          # total 0x45 .. 02 ff reject frames
+        mism_run = 0            # consecutive rejects (desync detector)
+        mism_first = None       # (idx, off) of the first reject seen
+        DESYNC_ABORT = 8        # consecutive rejects ⇒ counter desynced, bank will be bad
 
         # re-point the notify handler to watch for hard errors during streaming
         while not acks.empty():
@@ -259,13 +263,40 @@ async def run_ble(blob, version, address, scan_seconds, commit, mtu_arg, pace_ar
             off += len(part)
             idx += 1
             await asyncio.sleep(pace)
-            # drain any notifications without blocking; a 0x00/0x11 error reply aborts
+            # drain any notifications without blocking.
+            #   0x00 with nonzero status  = hard cmd error -> abort
+            #   0x45 .. 02 ff             = packet rejected (pkgIndex != device counter).
+            #     one dropped packet desyncs the counter and every later packet is
+            #     rejected, leaving the inactive bank incomplete, so a run of these
+            #     means the transfer is already doomed -> abort instead of streaming blind.
+            saw_reject = False
             while not acks.empty():
                 r = acks.get_nowait()
-                if r[1] == 0x00 and r[2] >= 1 and r[3] != 0:        # error status on a cmd-ack
+                if r[1] == 0x00 and r[2] >= 1 and r[3] != 0:
                     await abort(f"device error {r.hex()} near chunk {idx} off 0x{off:x}")
+                if r[1] == OP_SECT and len(r) >= 5 and r[3] == 0x02 and r[4] == 0xFF:
+                    saw_reject = True
+                    mism_total += 1
+                    if mism_first is None:
+                        mism_first = (idx, off)
+            if saw_reject:
+                mism_run += 1
+                if mism_run >= DESYNC_ABORT:
+                    await abort(
+                        f"counter desync: {mism_run} consecutive rejects, first at frame "
+                        f"{mism_first[0]} (off 0x{mism_first[1]:x}). The device is not "
+                        f"accepting sequential pkgIndex -> POWER-CYCLE the speaker (resets "
+                        f"its receive-counter) and re-run. Nothing was applied.")
+            else:
+                mism_run = 0
             if idx % 256 == 0 or off >= total:
-                print(f"  sent {off}/{total} ({100*off//total}%)  frames={idx}")
+                extra = f"  rejects={mism_total}" if mism_total else ""
+                print(f"  sent {off}/{total} ({100*off//total}%)  frames={idx}{extra}")
+
+        if mism_total:
+            await abort(f"{mism_total} packets were rejected during the stream; the inactive "
+                        f"bank is incomplete and 0x4d would fail its whole-file verify. "
+                        f"Power-cycle the speaker and re-run. Nothing was applied.")
 
         await asyncio.sleep(0.5)
         print("transfer complete (all bytes streamed); inactive bank written (reversible until 0x4d).")
